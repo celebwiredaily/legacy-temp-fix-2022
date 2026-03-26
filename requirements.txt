@@ -1,0 +1,19 @@
+# Video Automation Workflow Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# For ActivePieces integration
+flask>=3.0.0  # If running webhook locally (not needed for GitHub Actions)
+
+# GitHub API
+PyGithub>=2.1.1
+
+# Optional: For testing and development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Note: VUZA's dependencies are installed separately from its requirements.txt
+# ffmpeg must be installed at system level (not via pip)
