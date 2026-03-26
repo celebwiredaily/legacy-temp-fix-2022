@@ -22,7 +22,7 @@ on:
       voice:
         description: 'TTS voice'
         required: false
-        default: 'en-US-AriaNeural'
+        default: 'en-US-BrianMultilingualNeural'
       duration:
         description: 'Duration in seconds'
         required: false
