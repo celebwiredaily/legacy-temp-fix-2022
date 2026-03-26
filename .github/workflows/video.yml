@@ -73,7 +73,7 @@ jobs:
             echo "title=${{ github.event.client_payload.title }}" >> $GITHUB_OUTPUT
             echo "script=${{ github.event.client_payload.script }}" >> $GITHUB_OUTPUT
             echo "keywords=${{ github.event.client_payload.keywords }}" >> $GITHUB_OUTPUT
-            echo "voice=${{ github.event.client_payload.metadata.voice || 'en-US-AriaNeural' }}" >> $GITHUB_OUTPUT
+            echo "voice=${{ github.event.client_payload.metadata.voice || 'en-US-BrianMultilingualNeural' }}" >> $GITHUB_OUTPUT
             echo "duration=${{ github.event.client_payload.metadata.duration || '600' }}" >> $GITHUB_OUTPUT
             echo "use_pinterest=${{ github.event.client_payload.metadata.use_pinterest || 'true' }}" >> $GITHUB_OUTPUT
           else
