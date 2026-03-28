@@ -115,23 +115,18 @@ jobs:
         run: |
           mkdir -p assets/pinterest assets/audio output logs
 
-      # ── 7. SCRAPER ────────────────────────────────────────────────────────────
-      - name: 🔍 Scrape Pinterest assets
+      - name: 🎨 Generate AI b-roll images
         env:
-          PINTEREST_COOKIE: ${{ secrets.PINTEREST_COOKIE }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}   # optional, only for huggingface backend
         run: |
-          echo "Keywords: ${{ steps.inputs.outputs.keywords }}"
-          echo "Asset count: ${{ steps.inputs.outputs.asset_count }}"
-
-          python3 pinterest_scraper.py \
+          python3 image_generator.py \
             --keywords  "${{ steps.inputs.outputs.keywords }}" \
-            --output    assets/pinterest \
+            --script    "assets/audio/script.txt" \
+            --output    assets/images \
             --count     "${{ steps.inputs.outputs.asset_count }}" \
-            --cookie    "$PINTEREST_COOKIE" \
+            --backend   pollinations \
             --manifest  assets/manifest.json
 
-          echo "✅ Scraper done. Assets:"
-          find assets/pinterest -type f | wc -l
 
       # ── 8. AUDIO GENERATOR ───────────────────────────────────────────────────
       - name: 🎙 Generate voiceover
