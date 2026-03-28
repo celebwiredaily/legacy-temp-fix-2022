@@ -134,6 +134,11 @@ jobs:
         run: |
           cd VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper
           
+          # We call the engine directly to bypass the web server in app.py
+          python3 video_engine.py --config ../config/${{ env.PROJECT_ID }}_config.json \
+            --output ../output/${{ env.PROJECT_ID }}.mp4 \
+            --verbose
+          
           if [ -f "app.py" ]; then
             ENTRY_POINT="app.py"
           elif [ -f "main.py" ]; then
