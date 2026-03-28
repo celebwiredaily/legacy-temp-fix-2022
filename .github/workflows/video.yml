@@ -1,7 +1,6 @@
 name: Video Generation Pipeline
 
 on:
-  # Manual trigger for testing
   workflow_dispatch:
     inputs:
       title:
@@ -28,7 +27,6 @@ on:
         required: false
         default: 'true'
 
-  # Automation trigger for ActivePieces
   repository_dispatch:
     types: [trigger-video-gen]
 
@@ -36,31 +34,58 @@ jobs:
   generate-video:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg jq
           ffmpeg -version
-      
+
+      # ── CACHE: Get VUZA's latest commit SHA for cache key ──────────────────
+      - name: Get VUZA latest commit SHA
+        id: vuza_sha
+        run: |
+          SHA=$(git ls-remote https://github.com/AliRash3ed/VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper HEAD | cut -f1)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Cache VUZA repository
+        id: cache-vuza
+        uses: actions/cache@v4
+        with:
+          path: VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper
+          key: vuza-repo-${{ steps.vuza_sha.outputs.sha }}
+
       - name: Clone VUZA repository
+        if: steps.cache-vuza.outputs.cache-hit != 'true'
         run: |
           git clone https://github.com/AliRash3ed/VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper.git
+
+      # ── CACHE: pip packages keyed on requirements.txt ──────────────────────
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-vuza-${{ hashFiles('VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper/requirements.txt') }}
+          restore-keys: |
+            pip-vuza-
+
+      - name: Install Python dependencies
+        run: |
           cd VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install requests python-dotenv
-      
+
       - name: Parse input data
         id: parse_input
         run: |
@@ -79,19 +104,18 @@ jobs:
             echo 'duration=${{ github.event.inputs.duration }}' >> $GITHUB_OUTPUT
             echo 'use_pinterest=${{ github.event.inputs.use_pinterest }}' >> $GITHUB_OUTPUT
           fi
-      
+
       - name: Create project directory structure
         run: |
           mkdir -p assets scripts output logs config
           PROJECT_ID="video_$(date +%Y%m%d_%H%M%S)_${{ github.run_id }}"
           echo "PROJECT_ID=$PROJECT_ID" >> $GITHUB_ENV
-      
+
       - name: Generate VUZA configuration
         run: |
-          # Convert keywords to array format
           IFS=',' read -ra KEYWORDS <<< "${{ steps.parse_input.outputs.keywords }}"
           KEYWORDS_JSON=$(printf '%s\n' "${KEYWORDS[@]}" | jq -R . | jq -s -c .)
-          
+
           cat > config/${{ env.PROJECT_ID }}_config.json <<EOF
           {
             "project": {
@@ -128,41 +152,96 @@ jobs:
             }
           }
           EOF
-          cat config/${{ env.PROJECT_ID }}_config.json
-      
-      - name: Run VUZA video generation
+
+      # ── FIX: Start VUZA as a background server, call its API, then stop it ─
+      - name: Start VUZA server in background
         run: |
           cd VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper
-          
-          # We call the engine directly to bypass the web server in app.py
-          python3 video_engine.py --config ../config/${{ env.PROJECT_ID }}_config.json \
-            --output ../output/${{ env.PROJECT_ID }}.mp4 \
-            --verbose
-          
-          if [ -f "app.py" ]; then
-            ENTRY_POINT="app.py"
-          elif [ -f "main.py" ]; then
-            ENTRY_POINT="main.py"
-          elif [ -f "vuza.py" ]; then
-            ENTRY_POINT="vuza.py"
-          else
-            ENTRY_POINT="run.py"
+          python3 app.py &
+          echo "VUZA_PID=$!" >> $GITHUB_ENV
+
+          # Wait until the server is ready (up to 30s)
+          echo "Waiting for VUZA server to be ready..."
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8000/health > /dev/null 2>&1 || \
+               curl -s http://localhost:8000/docs   > /dev/null 2>&1 || \
+               curl -s http://localhost:8000/       > /dev/null 2>&1; then
+              echo "✅ VUZA server is up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Trigger video generation via VUZA API
+        run: |
+          CONFIG=$(cat config/${{ env.PROJECT_ID }}_config.json)
+
+          # POST the job to VUZA — adjust the endpoint path to match VUZA's actual API
+          RESPONSE=$(curl -s -X POST http://localhost:8000/generate \
+            -H "Content-Type: application/json" \
+            -d "$CONFIG")
+
+          echo "VUZA response: $RESPONSE"
+
+          # Extract job_id if VUZA returns one for async polling
+          JOB_ID=$(echo "$RESPONSE" | jq -r '.job_id // .id // empty')
+          if [ -n "$JOB_ID" ]; then
+            echo "JOB_ID=$JOB_ID" >> $GITHUB_ENV
           fi
-          
-          python3 $ENTRY_POINT --config ../config/${{ env.PROJECT_ID }}_config.json \
-            --output ../output/${{ env.PROJECT_ID }}.mp4 \
-            --pinterest-scraper \
-            --verbose
-      
+
+      - name: Poll for video completion
+        run: |
+          MAX_WAIT=3000   # 50 minutes
+          ELAPSED=0
+          POLL_INTERVAL=15
+
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            # If VUZA is synchronous, the output file is the signal
+            if [ -f "output/${{ env.PROJECT_ID }}.mp4" ]; then
+              echo "✅ Video file found after ${ELAPSED}s"
+              break
+            fi
+
+            # If VUZA is async and returns a job_id, poll its status endpoint
+            if [ -n "${JOB_ID:-}" ]; then
+              STATUS=$(curl -s http://localhost:8000/status/$JOB_ID | jq -r '.status // empty')
+              echo "Job status: $STATUS (${ELAPSED}s elapsed)"
+              if [ "$STATUS" = "completed" ] || [ "$STATUS" = "done" ]; then
+                echo "✅ Job completed"
+                break
+              elif [ "$STATUS" = "failed" ] || [ "$STATUS" = "error" ]; then
+                echo "❌ Job failed"
+                exit 1
+              fi
+            fi
+
+            sleep $POLL_INTERVAL
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+          done
+
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "❌ Timed out waiting for video"
+            exit 1
+          fi
+
+      - name: Stop VUZA server
+        if: always()
+        run: |
+          if [ -n "${VUZA_PID:-}" ]; then
+            kill $VUZA_PID 2>/dev/null || true
+            echo "VUZA server stopped"
+          fi
+
       - name: Verify video generation
         run: |
           if [ -f "output/${{ env.PROJECT_ID }}.mp4" ]; then
-            echo "✅ Success"
+            SIZE=$(du -sh output/${{ env.PROJECT_ID }}.mp4 | cut -f1)
+            echo "✅ Success — file size: $SIZE"
           else
-            echo "❌ Failed"
+            echo "❌ Video file not found"
             exit 1
           fi
-      
+
       - name: Upload video artifact
         if: always()
         uses: actions/upload-artifact@v4
