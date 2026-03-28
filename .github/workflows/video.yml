@@ -68,21 +68,23 @@ jobs:
       - name: Parse input data
         id: parse_input
         run: |
-          # Handle both repository_dispatch and workflow_dispatch
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            # Automated: Activepieces triggers this
             echo "title=${{ github.event.client_payload.title }}" >> $GITHUB_OUTPUT
             echo "script=${{ github.event.client_payload.script }}" >> $GITHUB_OUTPUT
             echo "keywords=${{ github.event.client_payload.keywords }}" >> $GITHUB_OUTPUT
-            echo "voice=${{ github.event.client_payload.metadata.voice || 'en-US-BrianMultilingualNeural' }}" >> $GITHUB_OUTPUT
-            echo "duration=${{ github.event.client_payload.metadata.duration || '600' }}" >> $GITHUB_OUTPUT
-            echo "use_pinterest=${{ github.event.client_payload.metadata.use_pinterest || 'true' }}" >> $GITHUB_OUTPUT
+            echo "voice=${{ github.event.client_payload.voice || 'en-US-BrianMultilingualNeural' }}" >> $GITHUB_OUTPUT
+            echo "duration=${{ github.event.client_payload.duration || '600' }}" >> $GITHUB_OUTPUT
+            echo "use_pinterest=${{ github.event.client_payload.use_pinterest || 'true' }}" >> $GITHUB_OUTPUT
           else
-            echo "title=${{ github.event.inputs.title }}" >> $GITHUB_OUTPUT
-            echo "script=${{ github.event.inputs.script }}" >> $GITHUB_OUTPUT
-            echo "keywords=${{ github.event.inputs.keywords }}" >> $GITHUB_OUTPUT
-            echo "voice=${{ github.event.inputs.voice }}" >> $GITHUB_OUTPUT
-            echo "duration=${{ github.event.inputs.duration }}" >> $GITHUB_OUTPUT
-            echo "use_pinterest=${{ github.event.inputs.use_pinterest }}" >> $GITHUB_OUTPUT
+            # Manual: When you click "Run Workflow" in GitHub
+            # We use single quotes here to safely wrap your typed-in text
+            echo 'title=${{ github.event.inputs.title }}' >> $GITHUB_OUTPUT
+            echo 'script=${{ github.event.inputs.script }}' >> $GITHUB_OUTPUT
+            echo 'keywords=${{ github.event.inputs.keywords }}' >> $GITHUB_OUTPUT
+            echo 'voice=${{ github.event.inputs.voice }}' >> $GITHUB_OUTPUT
+            echo 'duration=${{ github.event.inputs.duration }}' >> $GITHUB_OUTPUT
+            echo 'use_pinterest=${{ github.event.inputs.use_pinterest }}' >> $GITHUB_OUTPUT
           fi
       
       - name: Create project directory structure
