@@ -117,16 +117,15 @@ jobs:
 
       - name: 🎨 Generate AI b-roll images
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}   # optional, only for huggingface backend
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           python3 image_generator.py \
-            --keywords  "${{ steps.inputs.outputs.keywords }}" \
-            --script    "assets/audio/script.txt" \
-            --output    assets/images \
-            --count     "${{ steps.inputs.outputs.asset_count }}" \
-            --backend   pollinations \
-            --manifest  assets/manifest.json
-
+          --keywords "${{ steps.inputs.outputs.keywords }}" \
+          --script "assets/audio/script.txt" \
+          --output assets/images \
+          --count "${{ steps.inputs.outputs.asset_count }}" \
+          --backend gemini \
+          --manifest assets/manifest.json
 
       # ── 8. AUDIO GENERATOR ───────────────────────────────────────────────────
       - name: 🎙 Generate voiceover
