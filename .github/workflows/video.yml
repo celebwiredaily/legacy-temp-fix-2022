@@ -50,26 +50,21 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg jq
           ffmpeg -version
       
       - name: Clone VUZA repository
         run: |
           git clone https://github.com/AliRash3ed/VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper.git
           cd VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper
-          ls -la
-      
-      - name: Install Python dependencies
-        run: |
           pip install --upgrade pip
-          pip install -r VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper/requirements.txt
+          pip install -r requirements.txt
           pip install requests python-dotenv
       
       - name: Parse input data
         id: parse_input
         run: |
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            # Automated: Activepieces triggers this
             echo "title=${{ github.event.client_payload.title }}" >> $GITHUB_OUTPUT
             echo "script=${{ github.event.client_payload.script }}" >> $GITHUB_OUTPUT
             echo "keywords=${{ github.event.client_payload.keywords }}" >> $GITHUB_OUTPUT
@@ -77,8 +72,6 @@ jobs:
             echo "duration=${{ github.event.client_payload.duration || '600' }}" >> $GITHUB_OUTPUT
             echo "use_pinterest=${{ github.event.client_payload.use_pinterest || 'true' }}" >> $GITHUB_OUTPUT
           else
-            # Manual: When you click "Run Workflow" in GitHub
-            # We use single quotes here to safely wrap your typed-in text
             echo 'title=${{ github.event.inputs.title }}' >> $GITHUB_OUTPUT
             echo 'script=${{ github.event.inputs.script }}' >> $GITHUB_OUTPUT
             echo 'keywords=${{ github.event.inputs.keywords }}' >> $GITHUB_OUTPUT
@@ -97,10 +90,9 @@ jobs:
         run: |
           # Convert keywords to array format
           IFS=',' read -ra KEYWORDS <<< "${{ steps.parse_input.outputs.keywords }}"
-          KEYWORDS_JSON=$(printf '%s\n' "${KEYWORDS[@]}" | jq -R . | jq -s .)
+          KEYWORDS_JSON=$(printf '%s\n' "${KEYWORDS[@]}" | jq -R . | jq -s -c .)
           
-          # Create VUZA config with Pinterest scraper settings
-          cat > config/${PROJECT_ID}_config.json << 'EOF'
+          cat > config/${{ env.PROJECT_ID }}_config.json <<EOF
           {
             "project": {
               "title": "${{ steps.parse_input.outputs.title }}",
@@ -108,10 +100,7 @@ jobs:
               "duration": ${{ steps.parse_input.outputs.duration }}
             },
             "video": {
-              "resolution": {
-                "width": 1920,
-                "height": 1080
-              },
+              "resolution": {"width": 1080, "height": 1920},
               "fps": 30,
               "quality": "high"
             },
@@ -126,107 +115,53 @@ jobs:
               "pinterest_settings": {
                 "search_keywords": ${KEYWORDS_JSON},
                 "max_clips_per_keyword": 3,
-                "min_duration": 3,
-                "max_duration": 8,
                 "quality": "hd",
                 "download_path": "assets/pinterest"
               },
-              "pexels_settings": {
-                "api_key": "${{ secrets.PEXELS_API_KEY }}",
-                "enabled": false
-              },
-              "pixabay_settings": {
-                "api_key": "${{ secrets.PIXABAY_API_KEY }}",
-                "enabled": false
-              },
+              "pexels_settings": {"enabled": false},
+              "pixabay_settings": {"enabled": false},
               "keywords": ${KEYWORDS_JSON}
             },
             "output": {
-              "path": "output/${PROJECT_ID}.mp4",
-              "format": "mp4",
-              "codec": "h264"
+              "path": "output/${{ env.PROJECT_ID }}.mp4",
+              "format": "mp4"
             }
           }
           EOF
-          
-          echo "Config generated at: config/${PROJECT_ID}_config.json"
-          cat config/${PROJECT_ID}_config.json
+          cat config/${{ env.PROJECT_ID }}_config.json
       
       - name: Run VUZA video generation
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
           cd VUZA-Free-AI-Video-Creator-and-Pinterest-Video-Scraper
           
-          # Find VUZA entry point
-          if [ -f "main.py" ]; then
+          if [ -f "app.py" ]; then
+            ENTRY_POINT="app.py"
+          elif [ -f "main.py" ]; then
             ENTRY_POINT="main.py"
           elif [ -f "vuza.py" ]; then
             ENTRY_POINT="vuza.py"
-          elif [ -f "run.py" ]; then
-            ENTRY_POINT="run.py"
           else
-            echo "ERROR: Could not find VUZA entry point"
-            ls -la
-            exit 1
+            ENTRY_POINT="run.py"
           fi
           
-          echo "Using entry point: $ENTRY_POINT"
-          
-          # Run VUZA with config
-          python $ENTRY_POINT --config ../config/${PROJECT_ID}_config.json \
-            --output ../output/${PROJECT_ID}.mp4 \
+          python3 $ENTRY_POINT --config ../config/${{ env.PROJECT_ID }}_config.json \
+            --output ../output/${{ env.PROJECT_ID }}.mp4 \
             --pinterest-scraper \
             --verbose
       
       - name: Verify video generation
         run: |
-          if [ -f "output/${PROJECT_ID}.mp4" ]; then
-            echo "✅ Video generated successfully!"
-            ls -lh output/${PROJECT_ID}.mp4
-            
-            # Get video info
-            ffprobe -v quiet -print_format json -show_format -show_streams \
-              output/${PROJECT_ID}.mp4 > output/${PROJECT_ID}_info.json
-            
-            # Display info
-            cat output/${PROJECT_ID}_info.json | jq '.format.duration, .format.size'
+          if [ -f "output/${{ env.PROJECT_ID }}.mp4" ]; then
+            echo "✅ Success"
           else
-            echo "❌ Video generation failed!"
-            ls -la output/
+            echo "❌ Failed"
             exit 1
           fi
       
       - name: Upload video artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: video-${{ env.PROJECT_ID }}
-          path: |
-            output/${{ env.PROJECT_ID }}.mp4
-            output/${{ env.PROJECT_ID }}_info.json
-          retention-days: 7
-      
-      - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ env.PROJECT_ID }}
-          path: logs/
-          retention-days: 3
-      
-      # Optional: Upload to external storage
-      - name: Upload to cloud storage (optional)
-        if: success() && vars.ENABLE_CLOUD_UPLOAD == 'true'
-        run: |
-          # Example for S3 (requires AWS credentials in secrets)
-          # pip install awscli
-          # aws s3 cp output/${PROJECT_ID}.mp4 s3://${{ secrets.S3_BUCKET }}/videos/
-          
-          # Example for Google Drive (requires setup)
-          # Use rclone or gdrive CLI
-          
-          # Example for Dropbox
-          # Use dropbox-sdk or dbxcli
-          
-          echo "Cloud upload would happen here"
+          name: ${{ env.PROJECT_ID }}
+          path: output/${{ env.PROJECT_ID }}.mp4
+          retention-days: 7
