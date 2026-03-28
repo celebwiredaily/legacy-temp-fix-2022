@@ -1,0 +1,212 @@
+name: Video Generation Pipeline
+
+on:
+  # ── Manual trigger ─────────────────────────────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Video title (shown as title card)'
+        required: true
+        default: 'My Video'
+      script:
+        description: 'Full voiceover script'
+        required: true
+      keywords:
+        description: 'Pinterest search keywords (comma-separated)'
+        required: true
+        default: 'aesthetic room,cozy home'
+      voice:
+        description: 'Edge TTS voice'
+        required: false
+        default: 'en-US-BrianMultilingualNeural'
+      orientation:
+        description: 'Video orientation'
+        required: false
+        default: 'vertical'
+      asset_count:
+        description: 'Number of Pinterest assets to download'
+        required: false
+        default: '60'
+
+  # ── ActivePieces / automation trigger (untouched) ──────────────────────────
+  repository_dispatch:
+    types: [trigger-video-gen]
+
+jobs:
+  generate-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ──────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. System deps (ffmpeg) ──────────────────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg jq
+          echo "ffmpeg $(ffmpeg -version 2>&1 | head -1)"
+
+      # ── 4. Python deps cache ─────────────────────────────────────────────────
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        id: pip-cache
+        with:
+          path: ~/.cache/pip
+          key: pip-v1-${{ hashFiles('requirements.txt') }}
+          restore-keys: pip-v1-
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip -q
+          pip install edge-tts requests -q
+
+      # ── 5. Parse inputs (works for both workflow_dispatch and repo_dispatch) ─
+      - name: Parse inputs
+        id: inputs
+        run: |
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            TITLE="${{ github.event.client_payload.title }}"
+            KEYWORDS="${{ github.event.client_payload.keywords }}"
+            VOICE="${{ github.event.client_payload.voice }}"
+            ORIENTATION="${{ github.event.client_payload.orientation }}"
+            ASSET_COUNT="${{ github.event.client_payload.asset_count }}"
+            SCRIPT_TEXT="${{ github.event.client_payload.script }}"
+          else
+            TITLE="${{ github.event.inputs.title }}"
+            KEYWORDS="${{ github.event.inputs.keywords }}"
+            VOICE="${{ github.event.inputs.voice }}"
+            ORIENTATION="${{ github.event.inputs.orientation }}"
+            ASSET_COUNT="${{ github.event.inputs.asset_count }}"
+            SCRIPT_TEXT="${{ github.event.inputs.script }}"
+          fi
+
+          # Apply defaults for optional fields
+          VOICE="${VOICE:-en-US-BrianMultilingualNeural}"
+          ORIENTATION="${ORIENTATION:-vertical}"
+          ASSET_COUNT="${ASSET_COUNT:-60}"
+
+          # Generate project ID
+          PROJECT_ID="video_$(date +%Y%m%d_%H%M%S)_${{ github.run_id }}"
+
+          echo "title=$TITLE"           >> $GITHUB_OUTPUT
+          echo "keywords=$KEYWORDS"     >> $GITHUB_OUTPUT
+          echo "voice=$VOICE"           >> $GITHUB_OUTPUT
+          echo "orientation=$ORIENTATION" >> $GITHUB_OUTPUT
+          echo "asset_count=$ASSET_COUNT" >> $GITHUB_OUTPUT
+          echo "project_id=$PROJECT_ID"  >> $GITHUB_OUTPUT
+
+          # Write script to file (avoids shell escaping issues with long text)
+          mkdir -p assets/audio
+          printf '%s' "$SCRIPT_TEXT" > assets/audio/script.txt
+          echo "Script length: $(wc -c < assets/audio/script.txt) chars"
+
+      # ── 6. Create directory structure ────────────────────────────────────────
+      - name: Create directories
+        run: |
+          mkdir -p assets/pinterest assets/audio output logs
+
+      # ── 7. SCRAPER ────────────────────────────────────────────────────────────
+      - name: 🔍 Scrape Pinterest assets
+        env:
+          PINTEREST_COOKIE: ${{ secrets.PINTEREST_COOKIE }}
+        run: |
+          echo "Keywords: ${{ steps.inputs.outputs.keywords }}"
+          echo "Asset count: ${{ steps.inputs.outputs.asset_count }}"
+
+          python3 pinterest_scraper.py \
+            --keywords  "${{ steps.inputs.outputs.keywords }}" \
+            --output    assets/pinterest \
+            --count     "${{ steps.inputs.outputs.asset_count }}" \
+            --cookie    "$PINTEREST_COOKIE" \
+            --manifest  assets/manifest.json
+
+          echo "✅ Scraper done. Assets:"
+          find assets/pinterest -type f | wc -l
+
+      # ── 8. AUDIO GENERATOR ───────────────────────────────────────────────────
+      - name: 🎙 Generate voiceover
+        run: |
+          echo "Voice: ${{ steps.inputs.outputs.voice }}"
+
+          python3 audio_generator.py \
+            --script  "@assets/audio/script.txt" \
+            --output  assets/audio/voiceover.mp3 \
+            --voice   "${{ steps.inputs.outputs.voice }}" \
+            --rate    "+0%" \
+            --no-music
+
+          echo "✅ Audio done:"
+          ls -lh assets/audio/voiceover.mp3
+          cat assets/audio/audio_meta.json || true
+
+      # ── 9. VIDEO STITCHER ────────────────────────────────────────────────────
+      - name: 🎬 Stitch video
+        run: |
+          PROJECT_ID="${{ steps.inputs.outputs.project_id }}"
+
+          python3 video_stitcher.py \
+            --manifest    assets/manifest.json \
+            --audio       assets/audio/voiceover.mp3 \
+            --output      "output/${PROJECT_ID}.mp4" \
+            --title       "${{ steps.inputs.outputs.title }}" \
+            --orientation "${{ steps.inputs.outputs.orientation }}" \
+            --transition  0.5 \
+            --seed        42
+
+          echo "✅ Video done:"
+          ls -lh "output/${PROJECT_ID}.mp4"
+          cat output/video_meta.json || true
+
+      # ── 10. Verify ───────────────────────────────────────────────────────────
+      - name: ✅ Verify output
+        run: |
+          PROJECT_ID="${{ steps.inputs.outputs.project_id }}"
+          FILE="output/${PROJECT_ID}.mp4"
+
+          if [ ! -f "$FILE" ]; then
+            echo "❌ Video file not found: $FILE"
+            exit 1
+          fi
+
+          SIZE=$(du -sh "$FILE" | cut -f1)
+          DURATION=$(ffprobe -v quiet -print_format json -show_streams "$FILE" \
+            | python3 -c "import json,sys; s=[x for x in json.load(sys.stdin)['streams'] if x['codec_type']=='video']; print(f\"{float(s[0]['duration']):.1f}s\" if s else 'unknown')" 2>/dev/null || echo "unknown")
+
+          echo "✅ Output verified"
+          echo "   File: $FILE"
+          echo "   Size: $SIZE"
+          echo "   Duration: $DURATION"
+
+      # ── 11. Upload artifact ──────────────────────────────────────────────────
+      - name: 📦 Upload video artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.inputs.outputs.project_id }}
+          path: |
+            output/${{ steps.inputs.outputs.project_id }}.mp4
+            output/video_meta.json
+            assets/audio/audio_meta.json
+          retention-days: 7
+
+      # ── 12. Upload logs on failure ───────────────────────────────────────────
+      - name: 📋 Upload debug logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-${{ steps.inputs.outputs.project_id }}
+          path: |
+            assets/manifest.json
+            assets/audio/audio_meta.json
+            logs/
+          retention-days: 3
