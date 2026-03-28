@@ -32,7 +32,7 @@ class GitHubActionsVideoTrigger:
         title: str,
         script: str,
         keywords: List[str],
-        voice: str = "en-US-AriaNeural",
+        voice: str = "en-US-BrianMultilingualNeural",
         duration: int = 600,
         use_pinterest: bool = True,
         metadata: Optional[Dict] = None
@@ -150,7 +150,7 @@ if __name__ == "__main__":
         This eliminates the need for API keys from Pexels or Pixabay.
         """,
         keywords=["technology", "automation", "innovation", "future"],
-        voice="en-US-AriaNeural",
+        voice="en-US-BrianMultilingualNeural",
         duration=600,
         use_pinterest=True
     )
